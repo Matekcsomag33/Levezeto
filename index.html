@@ -1410,5 +1410,22 @@ renderList();showTab();runF("roots");
   let tm;addEventListener("resize",()=>{clearTimeout(tm);tm=setTimeout(layout,150)});
 })();
 </script>
+<script>
+// Használati események a GoatCounter számára (név nélkül, sütik nélkül)
+(()=>{
+  const send=(path,title)=>{try{if(window.goatcounter&&goatcounter.count)goatcounter.count({path,title:title||path,event:true})}catch(e){}};
+  document.addEventListener("click",e=>{
+    const b=e.target.closest("[data-op],[data-fop],[data-mode],[data-ex],#mexprRun,#btn-fuggvenyek,#btn-matrixok");if(!b)return;
+    const t=b.textContent.replace(/\s+/g," ").trim().slice(0,60);
+    if(b.dataset.op)send("matrix-"+b.dataset.op,t);
+    else if(b.dataset.fop)send("fuggveny-"+b.dataset.fop,t);
+    else if(b.dataset.mode)send("mod-"+b.dataset.mode+"-matrix",t);
+    else if(b.dataset.ex||b.id==="mexprRun")send("matrix-kifejezes","Kifejezés");
+    else send(b.id==="btn-fuggvenyek"?"ful-fuggvenyek":"ful-matrixok",t);
+  });
+  document.addEventListener("toggle",e=>{const d=e.target;if(d.matches&&d.matches("details.steps")&&d.open)send("lepesek-megnyitva","Számítás lépései megnyitva")},true);
+})();
+</script>
+<script data-goatcounter="https://matekcsomag33.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
 </body>
 </html>
