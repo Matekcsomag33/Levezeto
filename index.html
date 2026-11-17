@@ -12,7 +12,7 @@
 <meta property="og:image:height" content="630">
 <meta property="og:locale" content="hu_HU">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="description" content="Levezető: mátrixműveletek pontos törtekkel és lépésenkénti kézi levezetéssel, valamint függvényábrázolás és -elemzés.">
+<meta name="description" content="Levezető: mátrixműveletek pontos törtekkel és lépésenkénti kézi levezetéssel, valamint függvényábrázolás, deriválás és integrálás levezetéssel.">
 <style>:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0}img{max-width:100%}</style>
 <title>Levezető</title>
 <meta name="claude:viewport-fit-sides" content="cover">
@@ -67,6 +67,8 @@ header p{margin:4px 0 0;color:var(--muted);max-width:65ch}
 .steps .matrix{gap:2px 8px}
 .steps .cell{font-size:13.5px;min-width:44px;padding:4px}
 .cell.aug{border-left:1.5px dashed var(--muted);padding-left:10px!important}
+.formula{font-family:var(--mono);font-size:24px;line-height:1.35;overflow-x:auto;padding-bottom:4px;margin-bottom:6px}
+.out>.btns{margin-top:10px}
 .exprrow{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 .exprrow .eqin{flex:1 1 260px}
 .panel{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:16px;min-width:0;display:grid;gap:12px}
@@ -321,6 +323,7 @@ select{height:36px;border:1px solid var(--line);border-radius:6px;background:var
         <div class="btns">
           <button class="op" data-fop="roots"><span class="sym">f(x) = 0</span>Zérushelyek</button>
           <button class="op" data-fop="ext"><span class="sym">f′(x) = 0</span>Szélsőértékek</button>
+          <button class="op" data-fop="deriv"><span class="sym">f′(x)</span>Derivált</button>
           <button class="op" data-fop="int"><span class="sym">∫ f dx</span>Határozott integrál</button>
           <span class="inline"><button class="op" data-fop="val"><span class="sym">f(x₀)</span>Helyettesítési érték</button><input id="x0" value="1" aria-label="x₀"></span>
           <span class="inline"><button class="op" data-fop="cross"><span class="sym">f = g</span>Metszéspontok</button><select id="selG" aria-label="Másik függvény"></select></span>
@@ -1122,6 +1125,376 @@ function compile(src){
   if(p<t.length)throw new Error(t[p].k===")"?"Fölösleges záró zárójel.":"A kifejezés vége nem értelmezhető.");
   return x=>{const y=f(x);return typeof y==="number"?y:NaN};
 }
+
+// ---------- szimbolikus kifejezések: elemzés, egyszerűsítés, derivált, integrál ----------
+const CANON={tan:"tg",cot:"ctg",asin:"arcsin",acos:"arccos",atan:"arctg",arctan:"arctg",log:"lg",sign:"sgn"};
+const NUM=v=>({t:"num",v}),XN={t:"x"};
+const add=(a,b)=>({t:"add",a,b}),sub=(a,b)=>({t:"sub",a,b}),mul=(a,b)=>({t:"mul",a,b}),dv=(a,b)=>({t:"div",a,b}),
+  PW=(a,b)=>({t:"pow",a,b}),ng=a=>({t:"neg",a}),fn=(f,a)=>({t:"fn",f,a});
+function parseAST(src){
+  src=String(src).replace(/^\s*(?:y|[a-zA-Z]\s*\(\s*x\s*\))\s*=/,"");
+  const t=tokenize(src);if(!t.length)throw new Error("Üres kifejezés.");
+  let p=0;const peek=()=>t[p],eat=k=>t[p]&&t[p].k===k?t[p++]:null;
+  const operand=tok=>tok&&(tok.k==="num"||tok.k==="name"||tok.k==="(");
+  function expr(){let a=term();for(;;){if(eat("+"))a=add(a,term());else if(eat("-"))a=sub(a,term());else return a}}
+  function term(){let a=unary();for(;;){if(eat("*"))a=mul(a,unary());else if(eat("/"))a=dv(a,unary());else if(operand(peek()))a=mul(a,power());else return a}}
+  function unary(){if(eat("-"))return ng(unary());if(eat("+"))return unary();return power()}
+  function power(){const b=primary();if(eat("^"))return PW(b,unary());return b}
+  function primary(){
+    const tok=t[p++];if(!tok)throw new Error("A kifejezés hiányos.");
+    if(tok.k==="num")return NUM(tok.v);
+    if(tok.k==="("){const a=expr();if(!eat(")"))throw new Error("Hiányzik egy záró zárójel.");return a}
+    if(tok.k==="name"){
+      const n=tok.v;if(n==="x")return XN;
+      if(n==="pi"||n==="π")return{t:"const",n:"pi"};if(n==="e")return{t:"const",n:"e"};
+      const f=CANON[n]||n;
+      if(eat("(")){const a=expr();if(!eat(")"))throw new Error("Hiányzik egy záró zárójel.");return fn(f,a)}
+      return fn(f,power());
+    }
+    throw new Error("Nem értelmezhető kifejezés.");
+  }
+  const r=expr();if(p<t.length)throw new Error("A kifejezés vége nem értelmezhető.");return r;
+}
+const FNE={sin:Math.sin,cos:Math.cos,tg:Math.tan,ctg:x=>1/Math.tan(x),arcsin:Math.asin,arccos:Math.acos,arctg:Math.atan,
+  sinh:Math.sinh,cosh:Math.cosh,tanh:Math.tanh,exp:Math.exp,ln:Math.log,lg:Math.log10,sqrt:Math.sqrt,cbrt:Math.cbrt,
+  abs:Math.abs,floor:Math.floor,ceil:Math.ceil,round:Math.round,sgn:Math.sign};
+function ev(n,x){
+  switch(n.t){
+    case"num":return n.v;case"x":return x;case"const":return n.n==="pi"?Math.PI:Math.E;
+    case"add":return ev(n.a,x)+ev(n.b,x);case"sub":return ev(n.a,x)-ev(n.b,x);
+    case"mul":return ev(n.a,x)*ev(n.b,x);case"div":return ev(n.a,x)/ev(n.b,x);
+    case"pow":return pw(ev(n.a,x),ev(n.b,x));case"neg":return-ev(n.a,x);
+    case"fn":return FNE[n.f](ev(n.a,x));
+  }
+}
+const hasX=n=>n.t==="x"||(n.a&&hasX(n.a))||(n.b&&hasX(n.b));
+const isN=(n,v)=>n.t==="num"&&(v===undefined||n.v===v);
+const key=n=>JSON.stringify(n);
+const eq=(a,b)=>key(a)===key(b);
+const gcdI=(a,b)=>{a=Math.abs(a);b=Math.abs(b);while(b)[a,b]=[b,a%b];return a||1};
+function toFrac(v){if(Number.isInteger(v))return[v,1];for(let q=2;q<=1000;q++){const p=v*q;if(Math.abs(p-Math.round(p))<1e-9)return[Math.round(p),q]}return null}
+function rat(n){ // [p,q] ha racionális konstans
+  switch(n.t){
+    case"num":return toFrac(n.v);
+    case"neg":{const a=rat(n.a);return a&&[-a[0],a[1]]}
+    case"add":case"sub":{const a=rat(n.a),b=rat(n.b);if(!a||!b)return null;const s=n.t==="add"?1:-1;return norm(a[0]*b[1]+s*b[0]*a[1],a[1]*b[1])}
+    case"mul":{const a=rat(n.a),b=rat(n.b);return a&&b?norm(a[0]*b[0],a[1]*b[1]):null}
+    case"div":{const a=rat(n.a),b=rat(n.b);return a&&b&&b[0]?norm(a[0]*b[1],a[1]*b[0]):null}
+    case"pow":{let a=rat(n.a),b=rat(n.b);if(!a||!b)return null;
+      if(b[1]!==1){const q=b[1];if(q>4||a[0]<0)return null;const rt=v=>{const r=Math.round(Math.pow(v,1/q));return r**q===v?r:null};
+        const r0=rt(a[0]),r1=rt(a[1]);if(r0===null||r1===null)return null;a=[r0,r1];b=[b[0],1]}
+      if(Math.abs(b[0])>12)return null;let k=b[0];if(k<0){if(!a[0])return null;k=-k;return norm(a[1]**k,a[0]**k)}return norm(a[0]**k,a[1]**k)}
+  }
+  return null;
+}
+function norm(p,q){if(q<0){p=-p;q=-q}const g=gcdI(p,q);p/=g;q/=g;return Math.abs(p)<1e12&&q<1e12?[p,q]:null}
+const fromRat=([p,q])=>q===1?NUM(p):p<0?ng(dv(NUM(-p),NUM(q))):dv(NUM(p),NUM(q));
+const lead=n=>n.t==="mul"?lead(n.a):n;
+function poly(n){
+  switch(n.t){
+    case"num":return[n.v];case"x":return[0,1];
+    case"neg":{const a=poly(n.a);return a&&a.map(v=>-v)}
+    case"add":case"sub":{const a=poly(n.a),b=poly(n.b);if(!a||!b)return null;const s=n.t==="add"?1:-1;
+      return Array.from({length:Math.max(a.length,b.length)},(_,i)=>(a[i]||0)+s*(b[i]||0))}
+    case"mul":{const a=poly(n.a),b=poly(n.b);if(!a||!b||a.length+b.length>12)return null;const r=Array(a.length+b.length-1).fill(0);
+      a.forEach((x,i)=>b.forEach((y,j)=>r[i+j]+=x*y));return r}
+    case"div":{const a=poly(n.a);if(!a||!isN(n.b)||!n.b.v)return null;return a.map(v=>v/n.b.v)}
+    case"pow":{const a=poly(n.a);if(!a||!isN(n.b)||!Number.isInteger(n.b.v)||n.b.v<0||n.b.v*(a.length-1)>10)return null;
+      let r=[1];for(let k=0;k<n.b.v;k++){const t=Array(r.length+a.length-1).fill(0);r.forEach((x,i)=>a.forEach((y,j)=>t[i+j]+=x*y));r=t}return r}
+  }
+  return null;
+}
+function fromPoly(c){
+  let out=null;
+  for(let k=c.length-1;k>=0;k--){
+    const v=c[k];if(Math.abs(v)<1e-12)continue;const f=toFrac(Math.abs(v));if(!f)return null;
+    const xk=k===0?null:k===1?XN:PW(XN,NUM(k));
+    let term=xk?(f[0]===1?xk:mul(NUM(f[0]),xk)):NUM(f[0]);if(f[1]!==1)term=dv(term,NUM(f[1]));
+    out=out===null?(v<0?ng(term):term):(v<0?sub(out,term):add(out,term));
+  }
+  return out||NUM(0);
+}
+function collect(n){
+  const terms=[];
+  (function walk(m,sg){
+    if(m.t==="add"){walk(m.a,sg);walk(m.b,sg);return}
+    if(m.t==="sub"){walk(m.a,sg);walk(m.b,-sg);return}
+    if(m.t==="neg"){walk(m.a,-sg);return}
+    let c=sg,t=m;if(m.t==="mul"&&isN(m.a)){c=sg*m.a.v;t=m.b}else if(isN(m)){c=sg*m.v;t=null}
+    const k=t?key(t):"#",f=terms.find(x=>x.k===k);if(f)f.c+=c;else terms.push({k,t,c});
+  })(n,1);
+  return terms;
+}
+function fromTerms(terms){
+  terms=terms.filter(x=>Math.abs(x.c)>1e-12);terms.sort((p,q)=>(p.t?0:1)-(q.t?0:1));
+  let out=null;
+  for(const{t,c}of terms){
+    const f=toFrac(Math.abs(c));if(!f)return null;
+    let term=t?(f[0]===1?t:mul(NUM(f[0]),t)):NUM(f[0]);if(f[1]!==1)term=dv(term,NUM(f[1]));
+    out=out===null?(c<0?ng(term):term):(c<0?sub(out,term):add(out,term));
+  }
+  return out||NUM(0);
+}
+function normMul(n){
+  let c=1;const G=[];
+  const push=(b,e)=>{const k=key(b),g=G.find(x=>x.k===k);if(g)g.e+=e;else G.push({k,b,e})};
+  (function w(m,s){
+    if(m.t==="mul"){w(m.a,s);w(m.b,s)}
+    else if(m.t==="div"){w(m.a,s);w(m.b,-s)}
+    else if(isN(m))c*=Math.pow(m.v,s);
+    else if(m.t==="neg"){c=-c;w(m.a,s)}
+    else if(m.t==="pow"&&isN(m.b))push(m.a,m.b.v*s);
+    else push(m,s);
+  })(n,1);
+  if(!Number.isFinite(c))return n;
+  const rank=g=>g.b.t==="x"?0:hasX(g.b)?2:1;
+  const fac=g=>{const e=Math.abs(g.e);return e===1?g.b:simp1(PW(g.b,fromRat(toFrac(e)||[e,1])))};
+  const srt=(p,q)=>rank(p)-rank(q)||(p.k<q.k?-1:p.k>q.k?1:0);
+  const P=G.filter(g=>g.e>1e-12).sort(srt).map(fac),Q=G.filter(g=>g.e<-1e-12).sort(srt).map(fac);
+  if(c===0)return NUM(0);
+  const fr=toFrac(Math.abs(c))||[Math.abs(c),1];
+  const prod=(arr,k)=>{const L=k!==1?[NUM(k),...arr]:arr;if(!L.length)return NUM(1);let r=L[L.length-1];for(let i=L.length-2;i>=0;i--)r=mul(L[i],r);return r};
+  const num=prod(P,fr[0]),res=Q.length||fr[1]!==1?dv(num,prod(Q,fr[1])):num;
+  return c<0?ng(res):res;
+}
+function simp(n){
+  let r0=simp1(n);
+  if(r0.t==="mul"||r0.t==="div"){const q=normMul(r0);if(key(q).length<=key(r0).length+12)r0=q}
+  if(r0.t==="add"||r0.t==="sub"){const T=collect(r0);let cnt=0;(function w(m){if(m.t==="add"||m.t==="sub"){w(m.a);w(m.b)}else if(m.t==="neg")w(m.a);else cnt++})(r0);
+    if(T.length<cnt){const q=fromTerms(T);if(q)r0=q}}
+  if(hasX(r0)&&["add","sub","mul","div","neg","pow"].includes(r0.t)){const c=poly(r0);if(c){const q=fromPoly(c);if(q&&key(q).length<=key(r0).length)return q}}
+  return r0;
+}
+function simp1(n){
+  if(n.t==="num"||n.t==="x"||n.t==="const")return n;
+  const a=n.a&&simp(n.a),b=n.b&&simp(n.b);
+  if(!hasX(n)){const r=rat({...n,a,b});if(r)return fromRat(r)}
+  switch(n.t){
+    case"neg":
+      if(a.t==="neg")return a.a;
+      if(a.t==="mul"&&isN(a.a))return simp(mul(NUM(-a.a.v),a.b));
+      return ng(a);
+    case"add":
+      if(isN(a,0))return b;if(isN(b,0))return a;
+      if(b.t==="neg")return simp(sub(a,b.a));
+      if(isN(b)&&b.v<0)return sub(a,NUM(-b.v));
+      if(b.t==="mul"&&isN(b.a)&&b.a.v<0)return simp(sub(a,mul(NUM(-b.a.v),b.b)));
+      if(a.t==="neg")return simp(sub(b,a.a));
+      if(eq(a,b))return simp(mul(NUM(2),a));
+      return add(a,b);
+    case"sub":
+      if(isN(b,0))return a;if(isN(a,0))return simp(ng(b));
+      if(b.t==="neg")return simp(add(a,b.a));
+      if(isN(b)&&b.v<0)return add(a,NUM(-b.v));
+      if(b.t==="mul"&&isN(b.a)&&b.a.v<0)return simp(add(a,mul(NUM(-b.a.v),b.b)));
+      if(eq(a,b))return NUM(0);
+      return sub(a,b);
+    case"mul":
+      if(isN(a,0)||isN(b,0))return NUM(0);if(isN(a,1))return b;if(isN(b,1))return a;
+      if(isN(a,-1))return simp(ng(b));if(isN(b,-1))return simp(ng(a));
+      if(isN(b)&&!isN(a))return simp(mul(b,a));
+      if(a.t==="neg")return simp(ng(mul(a.a,b)));if(b.t==="neg")return simp(ng(mul(a,b.a)));
+      if(!hasX(a)&&!isN(a)&&isN(b))return simp(mul(b,a));
+      if(isN(a)&&b.t==="mul"&&isN(b.a))return simp(mul(NUM(a.v*b.a.v),b.b));
+      if(isN(a)&&(b.t==="add"||b.t==="sub"))return simp({t:b.t,a:mul(a,b.a),b:mul(a,b.b)});
+      if(!isN(a)&&b.t==="mul"&&isN(b.a))return simp(mul(b.a,mul(a,b.b)));
+      if(isN(a)&&b.t==="div"&&!hasX(b.a))return simp(dv(mul(a,b.a),b.b));
+      if(isN(a)&&b.t==="div"&&isN(b.b)){const r=norm(...toFrac(a.v),1);const q=r&&norm(r[0],b.b.v);if(q)return q[1]===1?simp(mul(NUM(q[0]),b.a)):dv(simp(mul(NUM(q[0]),b.a)),NUM(q[1]))}
+      if(b.t==="div"&&!isN(a)){if(eq(a,b.b))return b.a;return simp(dv(mul(a,b.a),b.b))}
+      if(eq(a,b))return PW(a,NUM(2));
+      if(a.t==="pow"&&eq(a.a,b))return simp(PW(b,add(a.b,NUM(1))));
+      if(b.t==="pow"&&eq(b.a,a))return simp(PW(a,add(b.b,NUM(1))));
+      if(a.t==="pow"&&b.t==="pow"&&eq(a.a,b.a))return simp(PW(a.a,add(a.b,b.b)));
+      if(a.t==="fn"&&(b.t==="x"||(b.t==="pow"&&b.a.t==="x")))return mul(b,a);
+      return mul(a,b);
+    case"div":
+      if(isN(a,0))return NUM(0);if(isN(b,1))return a;
+      if(a.t==="neg")return simp(ng(dv(a.a,b)));
+      if(eq(a,b))return NUM(1);
+      if(isN(b)&&a.t==="mul"&&isN(a.a)){const r=norm(...toFrac(a.a.v).map((v,i)=>i?v*b.v:v));if(r&&r[1]===1)return simp(mul(NUM(r[0]),a.b))}
+      if(a.t==="div")return simp(dv(a.a,mul(a.b,b)));
+      if(a.t==="mul"&&eq(a.a,b))return a.b;if(a.t==="mul"&&eq(a.b,b))return a.a;
+      if(!hasX(b)){const r=rat(b);if(r&&r[1]!==1&&r[0])return simp(mul(fromRat(norm(r[1],r[0])),a))}
+      if(isN(b)&&b.v<0)return simp(ng(dv(a,NUM(-b.v))));
+      return dv(a,b);
+    case"pow":
+      if(isN(b,0))return NUM(1);if(isN(b,1))return a;if(isN(a,1))return NUM(1);
+      if(a.t==="pow"&&!hasX(a.b)&&!hasX(b)&&!(a.a.t==="x"&&rat(a.b)&&rat(a.b)[0]%2===0))return simp(PW(a.a,mul(a.b,b)));
+      return PW(a,b);
+    case"fn":
+      if(!hasX(a)){const v=FNE[n.f](ev(a,0)),r=Math.round(v);if(Number.isFinite(v)&&Math.abs(v-r)<1e-12)return NUM(r)}
+      if(n.f==="ln"&&a.t==="const"&&a.n==="e")return NUM(1);
+      const negA=a.t==="neg"?a.a:(isN(a)&&a.v<0?NUM(-a.v):null);
+      if(negA&&["sin","tg","ctg","arcsin","arctg","sinh","tanh","cbrt"].includes(n.f))return simp(ng(fn(n.f,negA)));
+      if(negA&&["cos","cosh","abs"].includes(n.f))return simp(fn(n.f,negA));
+      if(n.f==="exp"&&a.t==="fn"&&a.f==="ln")return a.a;
+      return fn(n.f,a);
+  }
+  return n;
+}
+// ----- megjelenítés -----
+const SUPC={"0":"⁰","1":"¹","2":"²","3":"³","4":"⁴","5":"⁵","6":"⁶","7":"⁷","8":"⁸","9":"⁹","-":"⁻"};
+const supS=s=>s.split("").map(c=>SUPC[c]).join("");
+const fmtV=v=>{if(Number.isInteger(v))return String(Math.abs(v));const f=toFrac(v);return f?`${Math.abs(f[0])}/${f[1]}`:String(+Math.abs(v).toPrecision(6))};
+const PREC={add:1,sub:1,neg:2,mul:2,div:2,pow:4,fn:5,x:5,const:5,num:5};
+const prec=n=>n.t==="num"&&n.v<0?2:PREC[n.t];
+const FNAME={sinh:"sh",cosh:"ch",tanh:"th"};
+function S(n,p=0){
+  const s=S0(n);return prec(n)<p?`(${s})`:s;
+}
+function S0(n){
+  switch(n.t){
+    case"num":return(n.v<0?"−":"")+fmtV(n.v);
+    case"x":return"x";case"const":return n.n==="pi"?"π":"e";
+    case"add":return`${S(n.a,1)} + ${S(n.b,1)}`;
+    case"sub":return`${S(n.a,1)} − ${S(n.b,2)}`;
+    case"neg":return`−${S(n.a,2)}`;
+    case"mul":{
+      const L=S(n.a,2),wrapR=["add","sub","div","neg"].includes(n.b.t)||(n.b.t==="num"&&n.b.v<0);
+      const R=wrapR?`(${S0(n.b)})`:S0(n.b),ld=lead(n.b);
+      const jux=isN(n.a)&&n.a.v>0&&!wrapR&&(ld.t==="x"||(ld.t==="pow"&&ld.a.t==="x"));
+      return jux?L+R:`${L}·${R}`;
+    }
+    case"div":return`${S(n.a,2)}/${S(n.b,4)}`;
+    case"pow":{
+      const e=n.b,base=n.a;
+      const intE=isN(e)&&Number.isInteger(e.v);
+      if(base.t==="fn"&&!["sqrt","abs","cbrt","exp"].includes(base.f)&&intE&&e.v>0)return`${FNAME[base.f]||base.f}${supS(String(e.v))}(${S(base.a)})`;
+      const B=["x","const"].includes(base.t)||(isN(base)&&base.v>=0)||(base.t==="fn")?S0(base):`(${S0(base)})`;
+      if(intE)return B+supS(String(e.v));
+      if(e.t==="x")return B+"ˣ";
+      return`${B}^(${S0(e)})`;
+    }
+    case"fn":{
+      if(n.f==="sqrt")return`√(${S(n.a)})`;if(n.f==="cbrt")return`∛(${S(n.a)})`;if(n.f==="abs")return`|${S(n.a)}|`;
+      if(n.f==="exp")return n.a.t==="x"?"eˣ":`e^(${S(n.a)})`;
+      if(n.f==="ln"&&n.a.t==="abs"||n.f==="ln"&&n.a.t==="fn"&&n.a.f==="abs")return`ln|${S(n.a.a)}|`;
+      return`${FNAME[n.f]||n.f}(${S(n.a)})`;
+    }
+  }
+}
+function ser(n){ // vissza a beviteli formátumra
+  switch(n.t){
+    case"num":return n.v<0?`(${n.v})`:String(n.v);case"x":return"x";case"const":return n.n;
+    case"add":return`(${ser(n.a)}+${ser(n.b)})`;case"sub":return`(${ser(n.a)}-${ser(n.b)})`;
+    case"mul":return`(${ser(n.a)}*${ser(n.b)})`;case"div":return`(${ser(n.a)}/${ser(n.b)})`;
+    case"pow":return`(${ser(n.a)}^${ser(n.b)})`;case"neg":return`(-${ser(n.a)})`;
+    case"fn":return`${n.f}(${ser(n.a)})`;
+  }
+}
+const pretty=n=>{const s=ser(n);return s.replace(/^\((.*)\)$/,(m,i)=>{let d=0;for(const c of i){if(c==="(")d++;if(c===")"&&--d<0)return m}return i})};
+// ----- derivált lépésekkel -----
+function outerD(f,u){
+  switch(f){
+    case"sin":return fn("cos",u);case"cos":return ng(fn("sin",u));
+    case"tg":return dv(NUM(1),PW(fn("cos",u),NUM(2)));case"ctg":return ng(dv(NUM(1),PW(fn("sin",u),NUM(2))));
+    case"arcsin":return dv(NUM(1),fn("sqrt",sub(NUM(1),PW(u,NUM(2)))));case"arccos":return ng(dv(NUM(1),fn("sqrt",sub(NUM(1),PW(u,NUM(2))))));
+    case"arctg":return dv(NUM(1),add(NUM(1),PW(u,NUM(2))));
+    case"sinh":return fn("cosh",u);case"cosh":return fn("sinh",u);case"tanh":return dv(NUM(1),PW(fn("cosh",u),NUM(2)));
+    case"exp":return fn("exp",u);case"ln":return dv(NUM(1),u);case"lg":return dv(NUM(1),mul(u,fn("ln",NUM(10))));
+    case"sqrt":return dv(NUM(1),mul(NUM(2),fn("sqrt",u)));case"cbrt":return dv(NUM(1),mul(NUM(3),PW(fn("cbrt",u),NUM(2))));
+    case"abs":return fn("sgn",u);
+    default:return NUM(0);
+  }
+}
+const D_=s=>`(${s})′`;
+function dsym(n,log){
+  const L=s=>{if(log.length<60)log.push(s)};
+  switch(n.t){
+    case"num":case"const":return NUM(0);
+    case"x":return NUM(1);
+    case"add":case"sub":{const o=n.t==="add"?"+":"−";
+      L(`${n.t==="add"?"Összeg":"Különbség"} deriváltja tagonként: ${D_(S(n))} = ${D_(S(n.a))} ${o} ${D_(S(n.b))}`);
+      const a=dsym(n.a,log),b=dsym(n.b,log);return n.t==="add"?add(a,b):sub(a,b)}
+    case"neg":L(`Előjel kiemelése: ${D_(S(n))} = −${D_(S(n.a))}`);return ng(dsym(n.a,log));
+    case"mul":{
+      if(!hasX(n.a)){L(`Konstansszoros: ${D_(S(n))} = ${S(n.a,2)}·${D_(S(n.b))}`);return mul(n.a,dsym(n.b,log))}
+      if(!hasX(n.b)){L(`Konstansszoros: ${D_(S(n))} = ${S(n.b,2)}·${D_(S(n.a))}`);return mul(n.b,dsym(n.a,log))}
+      L(`Szorzatszabály, (u·v)′ = u′·v + u·v′: ${D_(S(n))} = ${D_(S(n.a))}·${S(n.b,3)} + ${S(n.a,2)}·${D_(S(n.b))}`);
+      return add(mul(dsym(n.a,log),n.b),mul(n.a,dsym(n.b,log)))}
+    case"div":{
+      if(!hasX(n.b)){L(`Konstanssal osztás: ${D_(S(n))} = ${D_(S(n.a))} / ${S(n.b,4)}`);return dv(dsym(n.a,log),n.b)}
+      if(!hasX(n.a)){L(`Reciprok, (c/v)′ = −c·v′/v²: ${D_(S(n))} = −${S(n.a,2)}·${D_(S(n.b))} / (${S(n.b)})²`);return ng(dv(mul(n.a,dsym(n.b,log)),PW(n.b,NUM(2))))}
+      L(`Hányadosszabály, (u/v)′ = (u′·v − u·v′)/v²: ${D_(S(n))} = (${D_(S(n.a))}·${S(n.b,3)} − ${S(n.a,2)}·${D_(S(n.b))}) / (${S(n.b)})²`);
+      return dv(sub(mul(dsym(n.a,log),n.b),mul(n.a,dsym(n.b,log))),PW(n.b,NUM(2)))}
+    case"pow":{
+      const u=n.a,k=n.b;
+      if(!hasX(k)){
+        const outer=simp(mul(k,PW(u,sub(k,NUM(1)))));
+        if(u.t==="x"){L(`Hatványszabály, (xⁿ)′ = n·xⁿ⁻¹: ${D_(S(n))} = ${S(outer)}`);return outer}
+        L(`Láncszabály hatványra, (uⁿ)′ = n·uⁿ⁻¹·u′: ${D_(S(n))} = ${S(outer,2)}·${D_(S(u))}`);return mul(outer,dsym(u,log))}
+      if(!hasX(u)){
+        const isE=u.t==="const"&&u.n==="e",lnA=isE?NUM(1):fn("ln",u);
+        if(k.t==="x"){L(isE?`Alapderivált: (eˣ)′ = eˣ`:`Exponenciális, (aˣ)′ = aˣ·ln a: ${D_(S(n))} = ${S(simp(mul(n,lnA)))}`);return mul(n,lnA)}
+        L(`Láncszabály, (a^u)′ = a^u·ln a·u′: ${D_(S(n))} = ${S(simp(mul(n,lnA)),2)}·${D_(S(k))}`);return mul(mul(n,lnA),dsym(k,log))}
+      L(`Általános hatvány: u^v = e^(v·ln u), így ${D_(S(n))} = ${S(n,2)}·${D_(S(mul(k,fn("ln",u))))}`);
+      return mul(n,dsym(mul(k,fn("ln",u)),log))}
+    case"fn":{
+      const o=simp(outerD(n.f,n.a));
+      if(["floor","ceil","round","sgn"].includes(n.f)){L(`${D_(S(n))} = 0 (a szakadási pontokon kívül, ott nem deriválható)`);return NUM(0)}
+      if(n.a.t==="x"){L(`Alapderivált: ${D_(S(n))} = ${S(o)}`);return o}
+      L(`Láncszabály, (f(u))′ = f′(u)·u′: ${D_(S(n))} = ${S(o,2)}·${D_(S(n.a))}`);return mul(o,dsym(n.a,log))}
+  }
+}
+function derivative(src){const ast=parseAST(src),log=[];const d=simp(dsym(ast,log));return{ast,d,log}}
+// ----- integrál lépésekkel -----
+function lin(u){
+  if(!hasX(u))return null;
+  const b=ev(u,0),a=ev(u,1)-b;if(!Number.isFinite(a)||!Number.isFinite(b)||Math.abs(a)<1e-12)return null;
+  for(const t of[2.7,-1.3,0.37,5.1])if(Math.abs(ev(u,t)-(a*t+b))>1e-9*(1+Math.abs(a*t+b)))return null;
+  return{a,b,aN:toFrac(a)?fromRat(toFrac(a)):NUM(a)};
+}
+const per=(F,l)=>l.a===1?F:dv(F,l.aN);
+function integ(n,log){
+  const L=s=>{if(log.length<60)log.push(s)};const I=s=>`∫${s} dx`;
+  if(!hasX(n)){const r=simp(mul(n,XN));L(`Konstans integrálja: ${I(S(n,2))} = ${S(r)}`);return r}
+  switch(n.t){
+    case"x":L(`Hatványszabály: ∫x dx = x²/2`);return dv(PW(XN,NUM(2)),NUM(2));
+    case"add":case"sub":{const o=n.t==="add"?"+":"−";L(`Tagonként integrálunk: ∫(${S(n)}) dx = ${I(S(n.a,2))} ${o} ${I(S(n.b,2))}`);
+      const a=integ(n.a,log),b=integ(n.b,log);return a&&b?(n.t==="add"?add(a,b):sub(a,b)):null}
+    case"neg":{L(`Előjel kiemelése: ${I("−"+S(n.a,2.5))} = −${I(S(n.a,2))}`);const a=integ(n.a,log);return a&&ng(a)}
+    case"mul":{
+      if(!hasX(n.a)){L(`Konstans kiemelése: ${I(S(n))} = ${S(n.a,2)}·${I(S(n.b,2))}`);const r=integ(n.b,log);return r&&mul(n.a,r)}
+      if(!hasX(n.b)){L(`Konstans kiemelése: ${I(S(n))} = ${S(n.b,2)}·${I(S(n.a,2))}`);const r=integ(n.a,log);return r&&mul(n.b,r)}
+      break}
+    case"div":{
+      if(!hasX(n.b)){L(`Konstanssal osztás: ∫(${S(n)}) dx = (1/${S(n.b,4)})·${I(S(n.a,2))}`);const r=integ(n.a,log);return r&&dv(r,n.b)}
+      if(!hasX(n.a)){
+        const l=lin(n.b);
+        if(l){const r=simp(mul(n.a,per(fn("ln",fn("abs",n.b)),l)));L(`∫c/u dx = c·ln|u|${l.a!==1?"/a":""} (u lineáris): ${I(S(n))} = ${S(r)}`);return r}
+        if(n.b.t==="pow"&&!hasX(n.b.b)&&lin(n.b.a)){L(`Átírás negatív kitevős hatvánnyá: ${S(n)} = ${S(simp(mul(n.a,PW(n.b.a,ng(n.b.b)))))}`);return integ(simp(mul(n.a,PW(n.b.a,ng(n.b.b)))),log)}
+        if(n.b.t==="fn"&&n.b.f==="sqrt"&&lin(n.b.a)){const m=simp(mul(n.a,PW(n.b.a,NUM(-0.5))));L(`Átírás: ${S(n)} = ${S(m)}`);return integ(m,log)}
+        const q=simp(n.b);const isX2p1=v=>Math.abs(ev(q,v)-(v*v+1))<1e-12;
+        if([0,1,-2,3.3].every(isX2p1)){const r=simp(mul(n.a,fn("arctg",XN)));L(`Alapintegrál, ∫1/(1+x²) dx = arctg x: ${I(S(n))} = ${S(r)}`);return r}
+      }
+      break}
+    case"pow":{
+      const u=n.a,k=n.b;
+      if(!hasX(k)){const l=lin(u);if(!l)break;const kv=ev(k,0);
+        if(Math.abs(kv+1)<1e-12){const r=per(fn("ln",fn("abs",u)),l);L(`∫u⁻¹ dx = ln|u|${l.a!==1?"/a":""}: ${I(S(n))} = ${S(simp(r))}`);return r}
+        const k1=simp(add(k,NUM(1))),r=dv(PW(u,k1),l.a===1?k1:mul(k1,l.aN));
+        L(`Hatványszabály, ∫xⁿ dx = xⁿ⁺¹/(n+1)${u.t==="x"?"":`, belső függvény u = ${S(u)}${l.a!==1?`, ezért még osztunk ${S(l.aN)}-vel`:""}`}: ${I(S(n))} = ${S(simp(r))}`);return r}
+      if(!hasX(u)){const l=lin(k);if(!l)break;const isE=u.t==="const"&&u.n==="e";
+        const r=isE?per(n,l):dv(n,l.a===1?fn("ln",u):mul(fn("ln",u),l.aN));
+        L(`${isE?"∫e^u dx = e^u":"∫a^u dx = a^u/ln a"}${l.a!==1?" (osztva a belső függvény meredekségével)":""}: ${I(S(n))} = ${S(simp(r))}`);return r}
+      break}
+    case"fn":{
+      const u=n.a,l=lin(u);if(!l)break;
+      const T={sin:ng(fn("cos",u)),cos:fn("sin",u),exp:fn("exp",u),sinh:fn("cosh",u),cosh:fn("sinh",u),
+        tg:ng(fn("ln",fn("abs",fn("cos",u)))),ctg:fn("ln",fn("abs",fn("sin",u))),
+        sqrt:mul(dv(NUM(2),NUM(3)),PW(u,dv(NUM(3),NUM(2)))),cbrt:mul(dv(NUM(3),NUM(4)),PW(u,dv(NUM(4),NUM(3)))),
+        ln:sub(mul(u,fn("ln",u)),u)};
+      if(!T[n.f])break;
+      const r=per(T[n.f],l);
+      L(`${n.f==="ln"?"Parciális integrálással ismert: ∫ln u dx = u·ln u − u":"Alapintegrál"}${u.t==="x"?"":`, belső függvény u = ${S(u)}${l.a!==1?`, osztunk ${S(l.aN)}-vel`:""}`}: ${I(S(n))} = ${S(simp(r))}`);
+      return r}
+  }
+  L(`${I(S(n))}: ehhez nem elegendők az alapszabályok (parciális vagy helyettesítéses integrálás kellene).`);
+  return null;
+}
+function primitive(src){const ast=parseAST(src),log=[];const r=integ(simp(ast),log);return{ast,F:r&&simp(r),log}}
+
+function subst(n,v){if(n.t==="x")return v;const r={...n};if(n.a)r.a=subst(n.a,v);if(n.b)r.b=subst(n.b,v);return r}
 const evalNum=s=>{const v=compile(s)(0);if(!Number.isFinite(v))throw new Error(`„${s}” nem véges szám.`);return v};
 
 // ---------- formatting ----------
@@ -1322,9 +1695,12 @@ new MutationObserver(()=>draw()).observe(document.documentElement,{attributes:tr
 // ---------- analysis ----------
 $("fromView").onclick=()=>{$("ia").value=fmtN(toX(0)).replace("−","-");$("ib").value=fmtN(toX(W)).replace("−","-")};
 $("clearMarks").onclick=()=>{marks={pts:[],area:null,col:"--accent"};$("clearMarks").hidden=true;draw()};
-function fshow(title,body){
+function fshow(title,body,steps,extra){
   $("fexpr").textContent=title;const o=$("fout");o.innerHTML="";const box=document.createElement("div");box.className="out";
-  if(typeof body==="string"){box.innerHTML=body}else box.appendChild(body);o.appendChild(box);
+  if(typeof body==="string"){box.innerHTML=body}else box.appendChild(body);
+  if(extra)box.appendChild(extra);
+  if(steps&&steps.length&&typeof stepsNode==="function")box.appendChild(stepsNode(steps));
+  o.appendChild(box);
   $("clearMarks").hidden=!(marks.pts.length||marks.area);draw();
 }
 function ptsTable(pts,note){
@@ -1350,12 +1726,48 @@ function runF(op){
       case"ext":{need(F,n);title=`${n} szélsőértékei`;
         marks.pts=extremaOf(F.f,a,b);
         fshow(title,ptsTable(marks.pts,`${n}(x)-nek nincs helyi szélsőértéke a(z) ${I} intervallum belsejében.`)+foot);return}
+      case"deriv":{need(F,n);title=`${n}′(x)`;
+        const D=derivative(F.src),d2=simp(dsym(D.d,[]));
+        const extra=document.createElement("div");extra.className="btns";
+        const add1=document.createElement("button");add1.className="chip";add1.textContent=`${n}′ felvétele a grafikonra`;
+        add1.onclick=()=>{if(fns.length>=6){add1.textContent="Legfeljebb 6 függvény lehet a listában";return}
+          const G={src:pretty(D.d),on:true};c(G);fns.push(G);renderList();draw();add1.disabled=true;add1.textContent=`Felvéve ${NAMESF[fns.length-1]}(x) néven`};
+        extra.appendChild(add1);
+        const steps=[{p:"A deriválási szabályokat kívülről befelé alkalmazzuk: először a legkülső műveletre, aztán a belső részekre."},
+          {lines:D.log.length?D.log:["Konstans deriváltja 0."]},{p:"Összevonás és egyszerűsítés után:"},{lines:[`${n}′(x) = ${S(D.d)}`]}];
+        fshow(title,`<div class="formula">${esc(n)}′(x) = ${esc(S(D.d))}</div><p class="hint">Második derivált: ${esc(n)}″(x) = ${esc(S(d2))}</p>`,steps,extra);return}
       case"int":{need(F,n);title=`∫ ${n}(x) dx, x ∈ ${I}`;
         const v=integrate(F.f,a,b);marks.area={i,a,b};
-        fshow(title,`<div class="scalar">≈ ${fmtN(v)}</div><p class="hint">Előjeles terület: az x-tengely alatti rész negatívan számít. Adaptív Simpson-módszerrel számolva.</p>`);return}
-      case"val":{need(F,n);const x0=evalNum($("x0").value),y=F.f(x0),d=deriv(F.f,x0);title=`${n}(${fmtN(x0)})`;
+        let P=null;try{P=primitive(F.src)}catch(e){}
+        const steps=[{h:"1. Primitív függvény keresése"},{lines:P?P.log:["A kifejezést nem sikerült szimbolikusan feldolgozni."]}];
+        let exact="",ok=false;
+        if(P&&P.F){
+          const Fa=ev(P.F,a),Fb=ev(P.F,b),sv=Fb-Fa;ok=Number.isFinite(sv)&&Math.abs(sv-v)<=1e-6*(1+Math.abs(v));
+          const bound=(id,t)=>{try{const nd=simp(parseAST($(id).value));if(!hasX(nd)&&Math.abs(ev(nd,0)-t)<1e-12)return nd}catch(e){}const r=toFrac(t);return r?fromRat(r):NUM(t)};
+          const aN=bound("ia",a),bN=bound("ib",b),An=simp(subst(P.F,aN)),Bn=simp(subst(P.F,bN)),Tn=simp(sub(Bn,An));
+          const show=(nd,val)=>isN(nd)||(rat(nd)&&!hasX(nd))?S(nd):`${S(nd)} ≈ ${fmtN(val)}`;
+          steps.push({lines:[`F(x) = ${S(P.F)} + C`]},{p:"Ellenőrzésképp F′(x) = f(x) kell legyen; ezt deriválással bármikor megnézheted."},
+            {h:"2. Newton–Leibniz-formula"},{lines:[`∫ₐᵇ f(x) dx = F(b) − F(a)`,`F(${S(bN)}) = ${show(Bn,Fb)}`,`F(${S(aN)}) = ${show(An,Fa)}`,
+              `∫ = F(${S(bN)}) − F(${S(aN)}) = ${show(Tn,sv)}`]});
+          if(ok)exact=(isN(Tn)||rat(Tn))?S(Tn):`${S(Tn)} ≈ ${fmtN(sv)}`;
+          if(!ok)steps.push({p:"Figyelem: a függvény az intervallumon nincs mindenhol értelmezve, vagy nem folytonos (pl. függőleges aszimptota van benne). Ilyenkor a Newton–Leibniz-formula nem alkalmazható, ezért a numerikus értéket kell elfogadni."});
+        } else steps.push({p:"Zárt alakú primitív függvény nélkül numerikusan közelítjük az integrált."});
+        if(!ok){
+          const N6=6,h=(b-a)/N6,rows=[];let s6=0;
+          for(let k=0;k<=N6;k++){const xk=a+k*h,fk=F.f(xk),w=k===0||k===N6?1:k%2?4:2;s6+=w*fk;rows.push(`x${SUB(k)} = ${fmtN(xk)}   f(x${SUB(k)}) = ${fmtN(fk)}   súly: ${w}`)}
+          steps.push({h:`${P&&P.F?"3":"2"}. Simpson-módszer (szemléltetés 6 részintervallummal)`},
+            {p:`h = (b − a)/6 = ${fmtN(h)}. A képlet: ∫ ≈ h/3 · [f(x₀) + 4f(x₁) + 2f(x₂) + 4f(x₃) + 2f(x₄) + 4f(x₅) + f(x₆)]`},
+            {lines:rows},{lines:[`∫ ≈ ${fmtN(h)}/3 · ${fmtN(s6)} = ${fmtN(h/3*s6)}`]},
+            {p:`Az adaptív Simpson-módszer ott sűríti a felosztást, ahol a függvény gyorsan változik, amíg a hiba elég kicsi lesz. Így kaptuk: ≈ ${fmtN(v)}`});
+        }
+        fshow(title,`<div class="scalar">${exact?`= ${esc(exact)}${/\//.test(exact)&&!/≈/.test(exact)?` ≈ ${fmtN(v)}`:""}`:`≈ ${fmtN(v)}`}</div><p class="hint">Előjeles terület: az x-tengely alatti rész negatívan számít.${ok?" Pontos érték a Newton–Leibniz-formulával.":" Adaptív Simpson-módszerrel számolva."}</p>`,steps);return}
+      case"val":{need(F,n);const x0=evalNum($("x0").value),y=F.f(x0);title=`${n}(${fmtN(x0)})`;
+        let d=deriv(F.f,x0),dform=null;try{const Dd=derivative(F.src).d,dv0=ev(Dd,x0);dform=S(Dd);if(Number.isFinite(dv0))d=dv0}catch(e){}
         if(Number.isFinite(y))marks.pts=[{x:x0,y,kind:"pont"}];
-        fshow(title,`<div class="scalar">${fmtN(y)}</div><p class="hint">${Number.isFinite(y)?`Derivált: ${n}′(${fmtN(x0)}) ≈ ${fmtN(d)}. Az érintő egyenlete: y ≈ ${fmtN(d)}·(x − ${fmtN(x0)}) + ${fmtN(y)}.`:`${n} nincs értelmezve az x = ${fmtN(x0)} pontban.`}</p>`);return}
+        const steps=Number.isFinite(y)?[{p:"Behelyettesítés:"},{lines:[`${n}(${fmtN(x0)}) = ${fmtN(y)}`]},
+          ...(dform?[{p:"A derivált függvény (lépései a Derivált gombnál láthatók):"},{lines:[`${n}′(x) = ${dform}`,`${n}′(${fmtN(x0)}) = ${fmtN(d)}`]}]:[]),
+          {p:"Az érintő egyenlete: y = f′(x₀)·(x − x₀) + f(x₀)"},{lines:[`y = ${fmtN(d)}·(x − ${fmtN(x0)}) + ${fmtN(y)}`]}]:null;
+        fshow(title,`<div class="scalar">${fmtN(y)}</div><p class="hint">${Number.isFinite(y)?`Derivált: ${n}′(${fmtN(x0)}) = ${fmtN(d)}. Az érintő egyenlete: y = ${fmtN(d)}·(x − ${fmtN(x0)}) + ${fmtN(y)}.`:`${n} nincs értelmezve az x = ${fmtN(x0)} pontban.`}</p>`,steps);return}
       case"cross":{const j=+$("selG").value,G=fns[j],m=NAMESF[j];need(F,n);need(G,m);
         if(i===j)throw new Error("Válassz két különböző függvényt a metszéspontokhoz.");
         title=`${n}(x) = ${m}(x)`;
